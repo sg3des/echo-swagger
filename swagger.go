@@ -4,8 +4,7 @@ import (
 	"html/template"
 	"net/http"
 	"path/filepath"
-	"regexp"
-	"sync"
+	"strings"
 
 	"github.com/labstack/echo/v4"
 	swaggerFiles "github.com/swaggo/files"
@@ -22,6 +21,7 @@ type Config struct {
 	DomID                string
 	InstanceName         string
 	PersistAuthorization bool
+	URIPrefix            string
 }
 
 // URL presents the url pointing to API definition (normally swagger.json or swagger.yaml).
@@ -72,13 +72,12 @@ var WrapHandler = EchoWrapHandler()
 
 // EchoWrapHandler wraps `http.Handler` into `echo.HandlerFunc`.
 func EchoWrapHandler(configFns ...func(c *Config)) echo.HandlerFunc {
-	var once sync.Once
-
 	config := &Config{
 		URL:          "doc.json",
 		DeepLinking:  true,
 		DocExpansion: "list",
 		DomID:        "#swagger-ui",
+		URIPrefix:    "/swagger",
 	}
 
 	for _, configFn := range configFns {
@@ -89,22 +88,19 @@ func EchoWrapHandler(configFns ...func(c *Config)) echo.HandlerFunc {
 	t := template.New("swagger_index.html")
 	index, _ := t.Parse(indexTemplate)
 
-	var re = regexp.MustCompile(`^(.*/)([^?].*)?[?|.]*$`)
-
 	h := webdav.Handler{
 		FileSystem: swaggerFiles.FS,
 		LockSystem: webdav.NewMemLS(),
+		Prefix:     config.URIPrefix,
 	}
 
 	return func(c echo.Context) error {
-		matches := re.FindStringSubmatch(c.Request().RequestURI)
-		path := matches[2]
+		uri := c.Request().RequestURI
 
-		once.Do(func() {
-			h.Prefix = matches[1]
-		})
+		fn := strings.TrimPrefix(uri, h.Prefix)
+		fn = strings.TrimPrefix(fn, "/")
 
-		switch filepath.Ext(path) {
+		switch filepath.Ext(fn) {
 		case ".html":
 			c.Response().Header().Set("Content-Type", "text/html; charset=utf-8")
 		case ".css":
@@ -123,10 +119,8 @@ func EchoWrapHandler(configFns ...func(c *Config)) echo.HandlerFunc {
 			defer response.Flush()
 		}
 
-		switch path {
-		case "":
-			c.Redirect(301, h.Prefix+"index.html")
-		case "index.html":
+		switch fn {
+		case "", "/", "index.html":
 			_ = index.Execute(c.Response().Writer, config)
 		case "doc.json":
 			doc, err := swag.ReadDoc(config.InstanceName)
@@ -152,9 +146,9 @@ const indexTemplate = `<!-- HTML for static distribution bundle build -->
   <meta charset="UTF-8">
   <title>Swagger UI</title>
   <link href="https://fonts.googleapis.com/css?family=Open+Sans:400,700|Source+Code+Pro:300,600|Titillium+Web:400,600,700" rel="stylesheet">
-  <link rel="stylesheet" type="text/css" href="./swagger-ui.css" >
-  <link rel="icon" type="image/png" href="./favicon-32x32.png" sizes="32x32" />
-  <link rel="icon" type="image/png" href="./favicon-16x16.png" sizes="16x16" />
+  <link rel="stylesheet" type="text/css" href="{{.URIPrefix}}/swagger-ui.css" >
+  <link rel="icon" type="image/png" href="{{.URIPrefix}}/favicon-32x32.png" sizes="32x32" />
+  <link rel="icon" type="image/png" href="{{.URIPrefix}}/favicon-16x16.png" sizes="16x16" />
   <style>
     html
     {
@@ -214,13 +208,13 @@ const indexTemplate = `<!-- HTML for static distribution bundle build -->
 
 <div id="swagger-ui"></div>
 
-<script src="./swagger-ui-bundle.js"> </script>
-<script src="./swagger-ui-standalone-preset.js"> </script>
+<script src="{{.URIPrefix}}/swagger-ui-bundle.js"> </script>
+<script src="{{.URIPrefix}}/swagger-ui-standalone-preset.js"> </script>
 <script>
 window.onload = function() {
   // Build a system
   const ui = SwaggerUIBundle({
-    url: "{{.URL}}",
+    url: "{{.URIPrefix}}/{{.URL}}",
     deepLinking: {{.DeepLinking}},
     docExpansion: "{{.DocExpansion}}",
     persistAuthorization: {{.PersistAuthorization}},
